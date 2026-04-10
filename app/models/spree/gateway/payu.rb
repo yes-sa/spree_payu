@@ -27,11 +27,15 @@ module Spree
       false
     end
 
+    def purchase(_amount, _source, _options = {})
+      billing_response(true, 'PayU payment created')
+    end
+
     def cancel(order_id, *args)
       Rails.logger.debug("Starting cancellation for #{order_id}")
 
       Rails.logger.debug("Spree order #{order_id} has been canceled.")
-      ActiveMerchant::Billing::Response.new(true, 'Spree order has been canceled.')
+      billing_response(true, 'Spree order has been canceled.')
     end
 
     def amount(amount)
@@ -45,7 +49,7 @@ module Spree
       order_number = order.try(:number)
       order_currency = order.try(:currency)
 
-      ActiveMerchant::Billing::Response.new(true, 'Refund successful')
+      billing_response(true, 'Refund successful')
     end
 
     def order_url
@@ -278,7 +282,16 @@ module Spree
     private
 
     def simulated_successful_billing_response
-      ActiveMerchant::Billing::Response.new(true, '', {}, {})
+      billing_response(true, '', {}, {})
+    end
+
+    # Spree 5.4 replaced ActiveMerchant::Billing::Response with Spree::PaymentResponse
+    def billing_response(success, message, params = {}, options = {})
+      if defined?(Spree::PaymentResponse)
+        Spree::PaymentResponse.new(success, message, params, options)
+      else
+        ActiveMerchant::Billing::Response.new(success, message, params, options)
+      end
     end
   end
 end
