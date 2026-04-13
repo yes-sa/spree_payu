@@ -4,6 +4,8 @@ require 'countries'
 
 module Spree
   class Gateway::Payu < PaymentMethod
+    class GatewayPayuError < StandardError; end
+
     preference :payu_client_id, :string
     preference :payu_pos_id, :string
     preference :payu_second_key, :string
@@ -25,18 +27,15 @@ module Spree
       false
     end
 
-    def available_for_order?(order)
-      return false if preferred_min_payment_amount.present? && order.total <= preferred_min_payment_amount
-      return false if preferred_max_payment_amount.present? && order.total >= preferred_max_payment_amount
-
-      true
+    def purchase(_amount, _source, _options = {})
+      billing_response(true, 'PayU payment created')
     end
 
     def cancel(order_id, *args)
       Rails.logger.debug("Starting cancellation for #{order_id}")
 
       Rails.logger.debug("Spree order #{order_id} has been canceled.")
-      ActiveMerchant::Billing::Response.new(true, 'Spree order has been canceled.')
+      billing_response(true, 'Spree order has been canceled.')
     end
 
     def amount(amount)
@@ -50,7 +49,7 @@ module Spree
       order_number = order.try(:number)
       order_currency = order.try(:currency)
 
-      ActiveMerchant::Billing::Response.new(true, 'Refund successful')
+      billing_response(true, 'Refund successful')
     end
 
     def order_url
@@ -81,9 +80,11 @@ module Spree
         Rails.logger.debug("create order - #{response.inspect}")
         payment.update(public_metadata: { token: response_body['orderId'], payment_url: (response_body['redirectUri']+ "&lang=#{order.billing_address.country.iso.downcase}") })
       else
-        Rails.logger.warn("register_order #{order.id}, payment_id: #{payment_id} failed => #{response.inspect}")
-        nil
+        raise GatewayPayuError, "register_order #{order.id}, payment_id: #{payment_id} failed => #{response.inspect}"
       end
+    rescue GatewayPayuError => e
+      Sentry.capture_exception(e)
+      nil
     end
 
     def register_order_payload(order, payment, gateway_id)
@@ -95,7 +96,7 @@ module Spree
                   currencyCode: order.currency,
                   totalAmount: amount(order.total),
                   products: items_payload(order.line_items),
-                  continueUrl: preferred_return_url,
+                  continueUrl: "#{preferred_return_url}/orders/#{order.number}",
                   notifyUrl: "#{preferred_return_status_url}/gateway/payu/comeback/#{gateway_id}/#{order.id}",
                   extOrderId: "#{order.number}|#{payment.number}",
                   buyer: {
@@ -166,8 +167,10 @@ module Spree
         response_body = JSON.parse(response.body)
         response_body['access_token']
       else
-        Rails.logger.debug("Token: #{response.inspect}")
+        raise GatewayPayuError, "Token: #{response.inspect}"
       end
+    rescue GatewayPayuError => e
+      Sentry.capture_exception(e)
     end
 
     def verify_url(payu_order_id)
@@ -198,8 +201,7 @@ module Spree
         if response.success?
           return true
         else
-          Rails.logger.warn("Verify_transaction #{payment.order.id} failed => #{response.inspect}")
-          return false
+          raise GatewayPayuError, "Verify_transaction #{payment.order.id} failed => #{response.inspect}"
         end
       end
 
@@ -216,6 +218,40 @@ module Spree
       private_metadata[:amount] = amount
       payment.update(private_metadata: private_metadata)
       true
+    rescue GatewayPayuError => e
+      Sentry.capture_exception(e)
+      false
+    end
+
+    def transactions_url(payu_order_id)
+      if preferred_test_mode
+        "https://secure.snd.payu.com/api/v2_1/orders/#{payu_order_id}/transactions"
+      else
+        "https://secure.payu.com/api/v2_1/orders/#{payu_order_id}/transactions"
+      end
+    end
+
+    def fetch_transaction_pay_method(payu_order_id)
+      conn = Faraday.new(url: transactions_url(payu_order_id)) do |faraday|
+        faraday.adapter Faraday.default_adapter
+        faraday.request :authorization, 'Bearer', authorize
+      end
+
+      response = conn.get do |req|
+        req.headers['Content-Type'] = 'application/json'
+      end
+      pay_method_code = JSON.parse(response.body).dig("transactions", -1, 'payMethod', 'value')
+      payment_flow = JSON.parse(response.body).dig("transactions", -1, 'paymentFlow')
+
+      pay_method_name = ::MethodMapperService.name_for(pay_method_code, payment_flow)
+
+      if response.success?
+        pay_method_name.presence
+      else
+        raise GatewayPayuError, "Fetch transaction pay method for #{payu_order_id.id} failed => #{response.inspect}"
+      end
+    rescue GatewayPayuError => e
+      Sentry.capture_exception(e)
     end
 
     def language(country_iso)
@@ -246,7 +282,16 @@ module Spree
     private
 
     def simulated_successful_billing_response
-      ActiveMerchant::Billing::Response.new(true, '', {}, {})
+      billing_response(true, '', {}, {})
+    end
+
+    # Spree 5.4 replaced ActiveMerchant::Billing::Response with Spree::PaymentResponse
+    def billing_response(success, message, params = {}, options = {})
+      if defined?(Spree::PaymentResponse)
+        Spree::PaymentResponse.new(success, message, params, options)
+      else
+        ActiveMerchant::Billing::Response.new(success, message, params, options)
+      end
     end
   end
 end

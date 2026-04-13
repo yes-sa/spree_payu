@@ -7,9 +7,12 @@ module SpreePayu
     isolate_namespace SpreePayuGateway
 
     config.autoload_paths += %W[#{config.root}/lib]
+    config.autoload_paths += %W[#{config.root}/app/services]
 
     config.after_initialize do |app|
       app.config.spree.payment_methods << Spree::Gateway::Payu
+      app.config.spree.payment_methods << Spree::Gateway::PayuInstallment
+      app.config.spree.payment_methods << Spree::Gateway::Paypo
     end
 
     def self.activate
