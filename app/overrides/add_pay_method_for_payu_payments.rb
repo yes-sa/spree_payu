@@ -6,7 +6,7 @@ class AddPayMethodForPayuPayments
     text: <<~ERB
         <p class="mb-0 text-muted">
           <%= "#\{I18n.t('payu.pay_method')\}: " %>
-          <strong><%= payment.public_metadata.fetch('pay_method', I18n.t('payu.unknown')) %></strong>
+          <strong><%= payment.payu.pay_method.presence || I18n.t('payu.unknown') %></strong>
         </p>
     ERB
   )
