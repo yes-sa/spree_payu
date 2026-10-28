@@ -33,7 +33,7 @@ module Spree
         track_checkout_completed
 
         if payu_redirect?(order)
-          redirect_to order.payments.last.public_metadata['payment_url'], allow_other_host: true, status: :see_other
+          redirect_to order.payments.last.payu.payment_url, allow_other_host: true, status: :see_other
         else
           redirect_to spree.checkout_complete_path(order.token), status: :see_other
         end
@@ -46,8 +46,7 @@ module Spree
       payment = order.payments.last
       return false if payment.nil?
 
-      url = payment.public_metadata&.[]('payment_url')
-      url.present?
+      payment.payu.payment_url.present?
     end
   end
 end
