@@ -1,6 +1,5 @@
 require 'faraday'
 require 'bigdecimal'
-require 'countries'
 
 module Spree
   class Gateway::Payu < PaymentMethod
@@ -76,7 +75,7 @@ module Spree
         Rails.logger.debug("create order - #{response.inspect}")
         payment.payu.register(
           token: response_body['orderId'],
-          payment_url: response_body['redirectUri'] + "&lang=#{order.billing_address.country.iso.downcase}"
+          payment_url: response_body['redirectUri'] + "&lang=#{language(order.store)}"
         )
       else
         raise GatewayPayuError, "register_order #{order.id}, payment_id: #{payment_id} failed => #{response.inspect}"
@@ -103,7 +102,7 @@ module Spree
                     phone: order.billing_address.phone,
                     firstName: order.billing_address.firstname,
                     lastName: order.billing_address.lastname,
-                    language: language(order.billing_address.country.iso),
+                    language: language(order.store),
                     delivery: {
                       street: order.shipping_address.address1,
                       postalCode: order.shipping_address.zipcode,
@@ -253,9 +252,9 @@ module Spree
       Sentry.capture_exception(e)
     end
 
-    def language(country_iso)
-      country = ISO3166::Country.new(country_iso)
-      country&.languages&.first || 'en'
+    def language(store)
+      locale = store&.default_locale.presence || I18n.locale
+      locale.to_s.split(/[-_]/).first.presence&.downcase || 'en'
     end
 
     def actions
